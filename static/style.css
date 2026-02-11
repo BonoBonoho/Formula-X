@@ -111,6 +111,12 @@ input {
   width: 100%; margin-top: 5px; padding: 10px 12px;
   border: 1px solid #d0d5dd; border-radius: 10px;
 }
+input[type="file"] {
+  width: auto;
+  margin-top: 0;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
 
 .alert {
   margin-bottom: 10px;

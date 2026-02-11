@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 from flask import (
@@ -20,10 +21,14 @@ from flask import (
     url_for,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_PATH = BASE_DIR / "app.db"
-RAW_DATA_DIR = BASE_DIR / "data" / "raw"
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR))).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATABASE_PATH = DATA_DIR / "app.db"
+RAW_DATA_DIR = DATA_DIR / "data" / "raw"
+ALLOWED_EXTENSIONS = {".xlsx", ".csv"}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
@@ -95,33 +100,149 @@ def init_db() -> None:
             fetched_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users (id)
         );
+
+        CREATE TABLE IF NOT EXISTS ingested_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            checksum TEXT NOT NULL,
+            row_count INTEGER NOT NULL,
+            ingested_at TEXT NOT NULL,
+            UNIQUE(filename, checksum)
+        );
         """
     )
     db.commit()
     db.close()
 
 
-def ingest_excel_files() -> dict[str, Any]:
+init_db()
+
+
+def _allowed_file(filename: str) -> bool:
+    return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+def _file_checksum(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_text(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, str):
+        value = value.strip().replace("%", "")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_month(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m")
+    return str(value).strip()
+
+
+def _load_dataframe(file_path: Path) -> pd.DataFrame:
+    if file_path.suffix.lower() == ".csv":
+        return pd.read_csv(file_path)
+    return pd.read_excel(file_path)
+
+
+def _normalize_columns(df: pd.DataFrame) -> dict[str, str]:
+    df.columns = [str(col).strip() for col in df.columns]
+    return {col.lower(): col for col in df.columns}
+
+
+def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, Any]:
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     db = get_db()
 
     processed_files = []
+    skipped_files = []
+    invalid_files = []
     inserted_rows = 0
+    skipped_rows = 0
 
-    for file_path in sorted(RAW_DATA_DIR.glob("*.xlsx")):
-        df = pd.read_excel(file_path)
-        expected = {
-            "member_name",
-            "branch",
-            "attendance_rate",
-            "repurchase_rate",
-            "csat_score",
-            "month",
-        }
-        if not expected.issubset(df.columns):
+    if file_paths is None:
+        file_paths = sorted(
+            list(RAW_DATA_DIR.glob("*.xlsx")) + list(RAW_DATA_DIR.glob("*.csv"))
+        )
+    else:
+        file_paths = [Path(path) for path in file_paths]
+
+    expected = {
+        "member_name",
+        "branch",
+        "attendance_rate",
+        "repurchase_rate",
+        "csat_score",
+        "month",
+    }
+
+    for file_path in file_paths:
+        if not file_path.exists() or not _allowed_file(file_path.name):
             continue
 
+        try:
+            checksum = _file_checksum(file_path)
+        except OSError:
+            invalid_files.append(file_path.name)
+            continue
+
+        already_ingested = db.execute(
+            "SELECT 1 FROM ingested_files WHERE filename = ? AND checksum = ?",
+            (file_path.name, checksum),
+        ).fetchone()
+        if already_ingested:
+            skipped_files.append(file_path.name)
+            continue
+
+        try:
+            df = _load_dataframe(file_path)
+        except Exception:
+            invalid_files.append(file_path.name)
+            continue
+
+        if df.empty:
+            invalid_files.append(file_path.name)
+            continue
+
+        col_map = _normalize_columns(df)
+        if not expected.issubset(col_map):
+            invalid_files.append(file_path.name)
+            continue
+
+        inserted_for_file = 0
         for _, row in df.iterrows():
+            member_name = _safe_text(row[col_map["member_name"]])
+            if not member_name:
+                skipped_rows += 1
+                continue
+
+            attendance = _safe_float(row[col_map["attendance_rate"]])
+            repurchase = _safe_float(row[col_map["repurchase_rate"]])
+            csat = _safe_float(row[col_map["csat_score"]])
+
+            if attendance is None or repurchase is None or csat is None:
+                skipped_rows += 1
+                continue
+
+            branch = _safe_text(row[col_map["branch"]])
+            month = _format_month(row[col_map["month"]])
+
             db.execute(
                 """
                 INSERT INTO bodycodi_records (
@@ -130,22 +251,36 @@ def ingest_excel_files() -> dict[str, Any]:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(row["member_name"]),
-                    str(row.get("branch", "")),
-                    float(row["attendance_rate"]),
-                    float(row["repurchase_rate"]),
-                    float(row["csat_score"]),
-                    str(row.get("month", "")),
+                    member_name,
+                    branch,
+                    attendance,
+                    repurchase,
+                    csat,
+                    month,
                     file_path.name,
                     datetime.utcnow().isoformat(),
                 ),
             )
             inserted_rows += 1
+            inserted_for_file += 1
 
+        db.execute(
+            """
+            INSERT INTO ingested_files (filename, checksum, row_count, ingested_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (file_path.name, checksum, inserted_for_file, datetime.utcnow().isoformat()),
+        )
         processed_files.append(file_path.name)
 
     db.commit()
-    return {"processed_files": processed_files, "inserted_rows": inserted_rows}
+    return {
+        "processed_files": processed_files,
+        "skipped_files": skipped_files,
+        "invalid_files": invalid_files,
+        "inserted_rows": inserted_rows,
+        "skipped_rows": skipped_rows,
+    }
 
 
 def compute_metrics() -> DashboardMetrics:
@@ -278,8 +413,23 @@ def dashboard() -> str:
         return redirect(url_for("login"))
 
     ingest_result = None
-    if request.method == "POST" and request.form.get("action") == "ingest":
-        ingest_result = ingest_excel_files()
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "ingest":
+            ingest_result = ingest_excel_files()
+        elif action == "upload":
+            upload_file = request.files.get("data_file")
+            if not upload_file or upload_file.filename == "":
+                flash("업로드할 파일을 선택해주세요.")
+            elif not _allowed_file(upload_file.filename):
+                flash("지원하지 않는 파일 형식입니다. (.xlsx, .csv)")
+            else:
+                RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
+                filename = secure_filename(upload_file.filename)
+                saved_path = RAW_DATA_DIR / filename
+                upload_file.save(saved_path)
+                ingest_result = ingest_excel_files([saved_path])
+                flash("파일 업로드 및 반영이 완료되었습니다.")
 
     metrics = compute_metrics()
 
@@ -405,5 +555,4 @@ def naver_place() -> str:
 
 
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=5000, debug=True)

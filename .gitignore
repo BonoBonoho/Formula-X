@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 app.db
+data/raw/*
+!data/raw/.gitkeep
