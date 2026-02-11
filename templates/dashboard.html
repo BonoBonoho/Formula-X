@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>바디코디 성과 대시보드</h2>
+<form method="post">
+  <input type="hidden" name="action" value="ingest">
+  <button type="submit">data/raw 엑셀 자동 불러오기</button>
+</form>
+
+{% if ingest_result %}
+<article>
+  처리 파일: {{ ingest_result.processed_files|join(', ') if ingest_result.processed_files else '없음' }}<br>
+  입력 건수: {{ ingest_result.inserted_rows }}
+</article>
+{% endif %}
+
+<div class="grid-3">
+  <div class="card"><strong>총 회원 수</strong><br>{{ metrics.total_members }}</div>
+  <div class="card"><strong>평균 출석률</strong><br>{{ metrics.avg_attendance }}%</div>
+  <div class="card"><strong>평균 재구매율</strong><br>{{ metrics.avg_repurchase }}%</div>
+  <div class="card"><strong>평균 CSAT</strong><br>{{ metrics.avg_csat }}/5</div>
+  <div class="card"><strong>종합 성과 점수</strong><br>{{ metrics.performance_score }}</div>
+  <div class="card"><strong>판단</strong><br>{{ metrics.judgment }}</div>
+</div>
+
+<h4>월별 지표 추이</h4>
+<canvas id="kpiChart" height="100"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const labels = {{ chart_labels|safe }};
+const attendanceData = {{ attendance_data|safe }};
+const repurchaseData = {{ repurchase_data|safe }};
+
+new Chart(document.getElementById('kpiChart'), {
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      { label: '출석률', data: attendanceData, borderColor: '#2f7ed8' },
+      { label: '재구매율', data: repurchaseData, borderColor: '#8bbc21' }
+    ]
+  },
+  options: { responsive: true }
+});
+</script>
+{% endblock %}
