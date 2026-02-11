@@ -335,6 +335,30 @@ def _parse_payment_datetime(value: Any) -> datetime | None:
         cleaned = cleaned.replace("초", "")
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         cleaned = re.sub(r"\b(AM|PM)\s*(\d{1,2}:\d{2})", r"\2 \1", cleaned)
+
+        date_match = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", cleaned)
+        time_match = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", cleaned)
+        if date_match:
+            year, month, day = map(int, date_match.groups())
+            hour = 0
+            minute = 0
+            second = 0
+            if time_match:
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2))
+                if time_match.group(3):
+                    second = int(time_match.group(3))
+
+                if "PM" in cleaned and hour < 12:
+                    hour += 12
+                if "AM" in cleaned and hour == 12:
+                    hour = 0
+
+            try:
+                return datetime(year, month, day, hour, minute, second)
+            except ValueError:
+                pass
+
         parsed = pd.to_datetime(cleaned, errors="coerce")
     else:
         parsed = pd.to_datetime(value, errors="coerce")
