@@ -304,7 +304,21 @@ def _parse_payment_datetime(value: Any) -> datetime | None:
         return value
     if isinstance(value, pd.Timestamp):
         return value.to_pydatetime()
-    parsed = pd.to_datetime(value, errors="coerce")
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        # Excel serial date support
+        try:
+            parsed = pd.to_datetime(value, unit="d", origin="1899-12-30", errors="coerce")
+            if not pd.isna(parsed):
+                return parsed.to_pydatetime()
+        except Exception:
+            pass
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+        cleaned = cleaned.replace("오전", "AM").replace("오후", "PM")
+        parsed = pd.to_datetime(cleaned, errors="coerce")
+    else:
+        parsed = pd.to_datetime(value, errors="coerce")
     if pd.isna(parsed):
         return None
     if isinstance(parsed, pd.Timestamp):
