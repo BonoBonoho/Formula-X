@@ -4,37 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>바디코디 성과 대시보드</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-  <style>
-    body { padding: 2rem; }
-    .grid-3 { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:1rem; }
-    .card { padding:1rem; border:1px solid #ddd; border-radius:10px; background:#fafafa; }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<nav>
-  <ul><li><strong>Bodycodi Dashboard</strong></li></ul>
-  <ul>
-    {% if session.user_id %}
-      <li><a href="{{ url_for('dashboard') }}">대시보드</a></li>
-      <li><a href="{{ url_for('naver_place') }}">네이버 플레이스</a></li>
-      <li><a href="{{ url_for('logout') }}">로그아웃</a></li>
-    {% else %}
-      <li><a href="{{ url_for('login') }}">로그인</a></li>
-      <li><a href="{{ url_for('signup') }}">회원가입</a></li>
-    {% endif %}
-  </ul>
-</nav>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">Formula-X <span class="chip">Bodycodi Insight</span></div>
+      <nav class="menu">
+        {% if session.user_id %}
+          <a href="{{ url_for('dashboard') }}">대시보드</a>
+          <a href="{{ url_for('naver_place') }}">네이버 플레이스</a>
+          <a href="{{ url_for('logout') }}">로그아웃</a>
+        {% else %}
+          <a href="{{ url_for('login') }}">로그인</a>
+          <a href="{{ url_for('signup') }}">회원가입</a>
+        {% endif %}
+      </nav>
+    </header>
 
-{% with messages = get_flashed_messages() %}
-  {% if messages %}
-    {% for message in messages %}
-      <article>{{ message }}</article>
-    {% endfor %}
-  {% endif %}
-{% endwith %}
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for message in messages %}
+          <div class="alert">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
 
-{% block content %}{% endblock %}
-
+    {% block content %}{% endblock %}
+  </div>
 </body>
 </html>

@@ -1,29 +1,59 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>바디코디 성과 대시보드</h2>
-<form method="post">
-  <input type="hidden" name="action" value="ingest">
-  <button type="submit">data/raw 엑셀 자동 불러오기</button>
-</form>
+<section class="hero">
+  <div class="card">
+    <h2>바디코디 성과 대시보드</h2>
+    <p>폴더 자동 수집: `data/raw`에 엑셀을 넣고 아래 버튼을 눌러 최신 데이터를 반영하세요.</p>
+    <form method="post" style="margin-top:12px;">
+      <input type="hidden" name="action" value="ingest">
+      <button class="btn" type="submit">엑셀 자동 불러오기</button>
+    </form>
+    {% if ingest_result %}
+      <div style="margin-top:10px; font-size:14px; color:#475467;">
+        처리 파일: {{ ingest_result.processed_files|join(', ') if ingest_result.processed_files else '없음' }}
+        <br>입력 건수: {{ ingest_result.inserted_rows }}
+      </div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h3>성과 판단</h3>
+    <p>종합점수는 출석률(40%) + 재구매율(35%) + CSAT환산(25%)로 계산됩니다.</p>
+    {% set score_class = 'score-good' if metrics.performance_score >= 85 else ('score-mid' if metrics.performance_score >= 70 else 'score-bad') %}
+    <h1 class="{{ score_class }}" style="margin-top:10px;">{{ metrics.performance_score }}</h1>
+    <p>판단 결과: <strong>{{ metrics.judgment }}</strong></p>
+  </div>
+</section>
 
-{% if ingest_result %}
-<article>
-  처리 파일: {{ ingest_result.processed_files|join(', ') if ingest_result.processed_files else '없음' }}<br>
-  입력 건수: {{ ingest_result.inserted_rows }}
-</article>
-{% endif %}
+<section class="grid-4">
+  <div class="card kpi"><div class="label">총 회원 수</div><div class="value">{{ metrics.total_members }}</div><span class="badge">전체 기준</span></div>
+  <div class="card kpi"><div class="label">평균 출석률</div><div class="value">{{ metrics.avg_attendance }}%</div><span class="badge">Attendance</span></div>
+  <div class="card kpi"><div class="label">평균 재구매율</div><div class="value">{{ metrics.avg_repurchase }}%</div><span class="badge">Repurchase</span></div>
+  <div class="card kpi"><div class="label">평균 CSAT</div><div class="value">{{ metrics.avg_csat }}</div><span class="badge">/ 5.0</span></div>
+</section>
 
-<div class="grid-3">
-  <div class="card"><strong>총 회원 수</strong><br>{{ metrics.total_members }}</div>
-  <div class="card"><strong>평균 출석률</strong><br>{{ metrics.avg_attendance }}%</div>
-  <div class="card"><strong>평균 재구매율</strong><br>{{ metrics.avg_repurchase }}%</div>
-  <div class="card"><strong>평균 CSAT</strong><br>{{ metrics.avg_csat }}/5</div>
-  <div class="card"><strong>종합 성과 점수</strong><br>{{ metrics.performance_score }}</div>
-  <div class="card"><strong>판단</strong><br>{{ metrics.judgment }}</div>
-</div>
-
-<h4>월별 지표 추이</h4>
-<canvas id="kpiChart" height="100"></canvas>
+<section class="two-cols">
+  <div class="card">
+    <h3>월별 KPI 추이</h3>
+    <canvas id="kpiChart" height="120"></canvas>
+  </div>
+  <div class="card">
+    <h3>최근 입력 데이터</h3>
+    <table class="table">
+      <thead><tr><th>회원</th><th>월</th><th>출석률</th></tr></thead>
+      <tbody>
+      {% for row in recent_records %}
+        <tr>
+          <td>{{ row.member_name }}</td>
+          <td>{{ row.month }}</td>
+          <td>{{ row.attendance_rate }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3">데이터가 없습니다.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
@@ -36,11 +66,27 @@ new Chart(document.getElementById('kpiChart'), {
   data: {
     labels,
     datasets: [
-      { label: '출석률', data: attendanceData, borderColor: '#2f7ed8' },
-      { label: '재구매율', data: repurchaseData, borderColor: '#8bbc21' }
+      {
+        label: '출석률',
+        data: attendanceData,
+        borderColor: '#2659ff',
+        backgroundColor: 'rgba(38,89,255,.08)',
+        tension: .35,
+        fill: true
+      },
+      {
+        label: '재구매율',
+        data: repurchaseData,
+        borderColor: '#12b76a',
+        tension: .35
+      }
     ]
   },
-  options: { responsive: true }
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom' } },
+    scales: { y: { beginAtZero: true, max: 100 } }
+  }
 });
 </script>
 {% endblock %}

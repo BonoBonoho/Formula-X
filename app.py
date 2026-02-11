@@ -299,11 +299,20 @@ def dashboard() -> str:
     chart_labels = [row["month"] for row in monthly_rows]
     attendance_data = [row["attendance"] for row in monthly_rows]
     repurchase_data = [row["repurchase"] for row in monthly_rows]
+    recent_records = db.execute(
+        """
+        SELECT member_name, month, attendance_rate
+        FROM bodycodi_records
+        ORDER BY id DESC
+        LIMIT 8
+        """
+    ).fetchall()
 
     return render_template(
         "dashboard.html",
         metrics=metrics,
         ingest_result=ingest_result,
+        recent_records=recent_records,
         chart_labels=json.dumps(chart_labels, ensure_ascii=False),
         attendance_data=json.dumps(attendance_data),
         repurchase_data=json.dumps(repurchase_data),

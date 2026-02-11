@@ -1,6 +1,23 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>엑셀 자동 수집 + 성과 판단 대시보드</h2>
-<p>회원가입 후 로그인해서 바디코디 데이터를 불러오고, 네이버 플레이스 기반 자동입력을 사용할 수 있습니다.</p>
-<a href="{{ url_for('signup') }}" role="button">시작하기</a>
+<section class="hero">
+  <div class="card">
+    <h1>엑셀 로데이터 자동 수집 + 성과 판단</h1>
+    <p>바디코디 Excel 데이터를 `data/raw` 폴더에 넣고 버튼 한 번으로 자동 적재하세요.</p>
+    <p>회원가입/로그인 후, KPI 기반 성과 진단과 월별 추이 대시보드를 확인할 수 있습니다.</p>
+    <div style="margin-top:12px; display:flex; gap:8px;">
+      <a class="btn" href="{{ url_for('signup') }}">시작하기</a>
+      <a class="btn alt" href="{{ url_for('login') }}">로그인</a>
+    </div>
+  </div>
+  <div class="card">
+    <h3>지원 기능</h3>
+    <ul>
+      <li>회원가입 / 로그인</li>
+      <li>엑셀 자동 적재 (.xlsx)</li>
+      <li>KPI 기반 점수 + 판단</li>
+      <li>네이버 플레이스 데이터 기반 자동입력(데모)</li>
+    </ul>
+  </div>
+</section>
 {% endblock %}

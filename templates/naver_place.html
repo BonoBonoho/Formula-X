@@ -1,48 +1,61 @@
 {% extends 'base.html' %}
 {% block content %}
-<h2>네이버 플레이스 연동 (데모)</h2>
-
-<section>
-  <h4>1) 로그인 정보 저장</h4>
-  <form method="post">
-    <input type="hidden" name="action" value="save_credential">
-    <label>Place ID <input name="place_id" required></label>
-    <label>네이버 아이디 <input name="username" required></label>
-    <label>네이버 비밀번호 <input name="password" type="password" required></label>
-    <button type="submit">저장</button>
-  </form>
+<section class="hero">
+  <div class="card">
+    <h2>네이버 플레이스 연동</h2>
+    <p>로그인 정보를 등록하고 플레이스 데이터를 조회해 바디코디 지표로 자동입력할 수 있습니다.</p>
+    <p style="font-size:13px;">※ 현재는 데모 모드(샘플 응답)입니다.</p>
+  </div>
+  <div class="card">
+    <h3>최근 조회 정보</h3>
+    {% if fetched_data %}
+      <p>Place ID: <strong>{{ fetched_data.place_id }}</strong></p>
+      <p>리뷰 수: {{ fetched_data.review_count }} · 평점: {{ fetched_data.average_rating }}</p>
+      <p>키워드: {{ fetched_data.recent_keywords|join(', ') }}</p>
+    {% else %}
+      <p>아직 조회된 데이터가 없습니다.</p>
+    {% endif %}
+  </div>
 </section>
 
-<section>
-  <h4>2) 플레이스 데이터 조회</h4>
-  <form method="post">
-    <input type="hidden" name="action" value="fetch_data">
-    <label>Place ID <input name="place_id" required></label>
-    <button type="submit">조회</button>
-  </form>
+<section class="two-cols">
+  <div class="card">
+    <h3>1) 네이버 계정 저장</h3>
+    <form method="post">
+      <input type="hidden" name="action" value="save_credential">
+      <label>Place ID<input name="place_id" required></label>
+      <label>네이버 아이디<input name="username" required></label>
+      <label>네이버 비밀번호<input name="password" type="password" required></label>
+      <button class="btn" type="submit">로그인 정보 저장</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3>2) 데이터 조회</h3>
+    <form method="post">
+      <input type="hidden" name="action" value="fetch_data">
+      <label>Place ID<input name="place_id" required></label>
+      <button class="btn" type="submit">플레이스 데이터 조회</button>
+    </form>
+  </div>
 </section>
 
-{% if fetched_data %}
-<article>
-  <strong>조회 결과</strong><br>
-  Place ID: {{ fetched_data.place_id }}<br>
-  리뷰 수: {{ fetched_data.review_count }}<br>
-  평점: {{ fetched_data.average_rating }}<br>
-  키워드: {{ fetched_data.recent_keywords|join(', ') }}
-</article>
-
-<section>
-  <h4>3) 바디코디 자동입력</h4>
+<section class="card" style="margin-top:16px;">
+  <h3>3) 바디코디 자동입력</h3>
+  {% if fetched_data %}
   <form method="post">
     <input type="hidden" name="action" value="autofill_to_bodycodi">
-    <label>회원명 <input name="member_name" value="네이버연동회원" required></label>
-    <label>지점 <input name="branch" value="강남점" required></label>
-    <label>월(YYYY-MM) <input name="month" value="2026-02" required></label>
-    <label>출석률 <input name="attendance_rate" value="{{ fetched_data.recommended_autofill.attendance_rate }}" required></label>
-    <label>재구매율 <input name="repurchase_rate" value="{{ fetched_data.recommended_autofill.repurchase_rate }}" required></label>
-    <label>CSAT <input name="csat_score" value="{{ fetched_data.recommended_autofill.csat_score }}" required></label>
-    <button type="submit">자동입력 반영</button>
+    <div class="row">
+      <label>회원명<input name="member_name" value="네이버연동회원" required></label>
+      <label>지점<input name="branch" value="강남점" required></label>
+      <label>월(YYYY-MM)<input name="month" value="2026-02" required></label>
+      <label>출석률<input name="attendance_rate" value="{{ fetched_data.recommended_autofill.attendance_rate }}" required></label>
+      <label>재구매율<input name="repurchase_rate" value="{{ fetched_data.recommended_autofill.repurchase_rate }}" required></label>
+      <label>CSAT<input name="csat_score" value="{{ fetched_data.recommended_autofill.csat_score }}" required></label>
+    </div>
+    <button class="btn" type="submit">추천값 자동입력 반영</button>
   </form>
+  {% else %}
+    <p>먼저 "플레이스 데이터 조회"를 실행하면 자동입력 폼이 채워집니다.</p>
+  {% endif %}
 </section>
-{% endif %}
 {% endblock %}
