@@ -29,7 +29,7 @@ Render는 기본적으로 **에페메랄 파일시스템**이므로 재배포/�
 
 1. Render에서 새 Web Service 생성 (GitHub 연결)
 2. Build Command: `pip install -r requirements.txt`  
-   Start Command: `gunicorn -w 2 -b 0.0.0.0:$PORT app:app`
+   Start Command: `gunicorn -w 1 --threads 2 --timeout 180 -b 0.0.0.0:$PORT app:app`
 3. 환경변수 추가
    - `SECRET_KEY`: 랜덤 문자열
    - `DATA_DIR`: Render 디스크 마운트 경로 (예: `/var/data`)
