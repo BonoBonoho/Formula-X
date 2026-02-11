@@ -321,18 +321,20 @@ def _parse_payment_datetime(value: Any) -> datetime | None:
     if isinstance(value, str):
         cleaned = value.strip()
         cleaned = cleaned.replace("오전", "AM").replace("오후", "PM")
-        cleaned = re.sub(r"\([가-힣]\)", "", cleaned)
+        cleaned = re.sub(r"\([가-힣]+\)", "", cleaned)
+        cleaned = cleaned.replace("/", "-")
+        cleaned = re.sub(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})", r"\1-\2-\3", cleaned)
         cleaned = (
             cleaned.replace("년", "-")
             .replace("월", "-")
             .replace("일", "")
             .replace(".", "-")
-            .replace("/", "-")
         )
         cleaned = re.sub(r"(\d{1,2})시", r"\1:", cleaned)
         cleaned = re.sub(r"(\d{1,2})분", r"\1", cleaned)
         cleaned = cleaned.replace("초", "")
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = re.sub(r"\b(AM|PM)\s*(\d{1,2}:\d{2})", r"\2 \1", cleaned)
         parsed = pd.to_datetime(cleaned, errors="coerce")
     else:
         parsed = pd.to_datetime(value, errors="coerce")
