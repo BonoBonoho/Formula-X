@@ -30,15 +30,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH = DATA_DIR / "app.db"
 RAW_DATA_DIR = DATA_DIR / "data" / "raw"
 ALLOWED_EXTENSIONS = {".xlsx", ".csv"}
-EXPECTED_COLUMNS = {
+BODYCODI_REQUIRED_COLUMNS = {
     "member_name",
-    "branch",
     "attendance_rate",
     "repurchase_rate",
     "csat_score",
     "month",
 }
-COLUMN_ALIASES = {
+BODYCODI_COLUMN_ALIASES = {
     "member_name": {
         "member_name",
         "membername",
@@ -86,6 +85,33 @@ COLUMN_ALIASES = {
         "정산월",
     },
 }
+SALES_REQUIRED_COLUMNS = {
+    "payment_datetime",
+    "payment_amount",
+}
+SALES_COLUMN_ALIASES = {
+    "branch_name": {"지점명", "지점", "센터", "클럽", "branch"},
+    "payment_datetime": {"결제일시", "결제일", "결제일자", "payment_datetime"},
+    "member_name": {"회원명", "회원이름", "고객명", "이름", "member_name"},
+    "contact": {"연락처", "전화번호", "휴대폰", "contact"},
+    "sale_id": {"판매번호", "판매ID", "sale_id"},
+    "product": {"판매상품", "상품명", "product"},
+    "sale_status": {"판매상태", "상태", "sale_status"},
+    "sale_price": {"판매가", "판매금액", "정가", "sale_price"},
+    "payment_category": {"결제분류", "결제구분", "payment_category"},
+    "payment_method": {"결제수단", "payment_method"},
+    "payment_type": {"결제방법", "payment_type"},
+    "deduction": {"공제", "공제금액", "deduction"},
+    "payment_amount": {"결제금액", "결제액", "payment_amount"},
+    "outstanding_amount": {"미수결제", "미수", "outstanding_amount"},
+    "contract": {"전자계약서", "계약서", "contract"},
+    "payment_request": {"결제요청", "payment_request"},
+    "refund_method": {"환불수단", "refund_method"},
+    "refund_amount": {"환불지급액", "환불금액", "refund_amount"},
+    "sales_rep": {"판매담당자", "담당자", "sales_rep"},
+    "memo": {"메모", "비고", "memo"},
+    "points": {"포인트적립", "포인트 적립", "points"},
+}
 
 
 def _normalize_key(value: Any) -> str:
@@ -95,9 +121,13 @@ def _normalize_key(value: Any) -> str:
     return text
 
 
-NORMALIZED_ALIASES = {
+NORMALIZED_BODYCODI_ALIASES = {
     canonical: {_normalize_key(alias) for alias in aliases}
-    for canonical, aliases in COLUMN_ALIASES.items()
+    for canonical, aliases in BODYCODI_COLUMN_ALIASES.items()
+}
+NORMALIZED_SALES_ALIASES = {
+    canonical: {_normalize_key(alias) for alias in aliases}
+    for canonical, aliases in SALES_COLUMN_ALIASES.items()
 }
 
 app = Flask(__name__)
@@ -112,6 +142,15 @@ class DashboardMetrics:
     avg_csat: float
     performance_score: float
     judgment: str
+
+
+@dataclass
+class SalesMetrics:
+    total_sales: float
+    total_transactions: int
+    avg_order_value: float
+    total_refunds: float
+    unique_members: int
 
 
 def get_db() -> sqlite3.Connection:
@@ -179,6 +218,35 @@ def init_db() -> None:
             ingested_at TEXT NOT NULL,
             UNIQUE(filename, checksum)
         );
+
+        CREATE TABLE IF NOT EXISTS sales_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_name TEXT,
+            payment_datetime TEXT NOT NULL,
+            payment_date TEXT,
+            payment_week TEXT,
+            payment_month TEXT,
+            member_name TEXT,
+            contact TEXT,
+            sale_id TEXT,
+            product TEXT,
+            sale_status TEXT,
+            sale_price REAL,
+            payment_category TEXT,
+            payment_method TEXT,
+            payment_type TEXT,
+            deduction REAL,
+            payment_amount REAL,
+            outstanding_amount REAL,
+            refund_method TEXT,
+            refund_amount REAL,
+            net_amount REAL,
+            sales_rep TEXT,
+            memo TEXT,
+            points REAL,
+            uploaded_file TEXT,
+            created_at TEXT NOT NULL
+        );
         """
     )
     db.commit()
@@ -210,7 +278,11 @@ def _safe_float(value: Any) -> float | None:
     if value is None or pd.isna(value):
         return None
     if isinstance(value, str):
-        value = value.strip().replace("%", "")
+        cleaned = value.strip().replace(",", "").replace("%", "")
+        cleaned = re.sub(r"[^\d\.\-]", "", cleaned)
+        if cleaned in {"", "-", "."}:
+            return None
+        value = cleaned
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -225,6 +297,26 @@ def _format_month(value: Any) -> str:
     return str(value).strip()
 
 
+def _parse_payment_datetime(value: Any) -> datetime | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    if isinstance(parsed, pd.Timestamp):
+        return parsed.to_pydatetime()
+    return parsed
+
+
+def _format_week(value: datetime) -> str:
+    iso_year, iso_week, _ = value.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
 def _load_dataframe(file_path: Path) -> pd.DataFrame:
     return _load_dataframe_with_header(file_path, header=0)
 
@@ -235,29 +327,40 @@ def _load_dataframe_with_header(file_path: Path, header: int | None) -> pd.DataF
     return pd.read_excel(file_path, header=header)
 
 
-def _build_column_map(df: pd.DataFrame) -> dict[str, str]:
+def _build_column_map(
+    df: pd.DataFrame,
+    alias_map: dict[str, set[str]],
+) -> dict[str, str]:
     df.columns = [str(col).strip() for col in df.columns]
     mapping: dict[str, str] = {}
     for col in df.columns:
         key = _normalize_key(col)
-        for canonical, aliases in NORMALIZED_ALIASES.items():
+        for canonical, aliases in alias_map.items():
             if key in aliases:
                 mapping[canonical] = col
                 break
     return mapping
 
 
-def _row_matches_expected(values: list[Any]) -> bool:
+def _row_matches_expected(
+    values: list[Any],
+    alias_map: dict[str, set[str]],
+    required: set[str],
+) -> bool:
     found: set[str] = set()
     for value in values:
         key = _normalize_key(value)
-        for canonical, aliases in NORMALIZED_ALIASES.items():
+        for canonical, aliases in alias_map.items():
             if key in aliases:
                 found.add(canonical)
-    return EXPECTED_COLUMNS.issubset(found)
+    return required.issubset(found)
 
 
-def _find_header_row(file_path: Path) -> int | None:
+def _find_header_row(
+    file_path: Path,
+    alias_map: dict[str, set[str]],
+    required: set[str],
+) -> int | None:
     try:
         probe = _load_dataframe_with_header(file_path, header=None)
     except Exception:
@@ -265,10 +368,28 @@ def _find_header_row(file_path: Path) -> int | None:
 
     for idx in range(min(8, len(probe.index))):
         row_values = probe.iloc[idx].tolist()
-        if _row_matches_expected(row_values):
+        if _row_matches_expected(row_values, alias_map, required):
             return idx
 
     return None
+
+
+def _detect_schema(df: pd.DataFrame) -> tuple[str | None, dict[str, str]]:
+    bodycodi_map = _build_column_map(df, NORMALIZED_BODYCODI_ALIASES)
+    sales_map = _build_column_map(df, NORMALIZED_SALES_ALIASES)
+
+    bodycodi_ok = BODYCODI_REQUIRED_COLUMNS.issubset(bodycodi_map)
+    sales_ok = SALES_REQUIRED_COLUMNS.issubset(sales_map)
+
+    if sales_ok and not bodycodi_ok:
+        return "sales", sales_map
+    if bodycodi_ok and not sales_ok:
+        return "bodycodi", bodycodi_map
+    if sales_ok:
+        return "sales", sales_map
+    if bodycodi_ok:
+        return "bodycodi", bodycodi_map
+    return None, {}
 
 
 def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, Any]:
@@ -316,58 +437,146 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
             invalid_files.append(file_path.name)
             continue
 
-        col_map = _build_column_map(df)
-        if not EXPECTED_COLUMNS.issubset(col_map):
-            header_row = _find_header_row(file_path)
+        schema, col_map = _detect_schema(df)
+        if schema is None:
+            header_row = _find_header_row(
+                file_path,
+                NORMALIZED_SALES_ALIASES,
+                SALES_REQUIRED_COLUMNS,
+            )
+            if header_row is None:
+                header_row = _find_header_row(
+                    file_path,
+                    NORMALIZED_BODYCODI_ALIASES,
+                    BODYCODI_REQUIRED_COLUMNS,
+                )
+
             if header_row is not None:
                 try:
                     df = _load_dataframe_with_header(file_path, header=header_row)
-                    col_map = _build_column_map(df)
+                    schema, col_map = _detect_schema(df)
                 except Exception:
-                    pass
+                    schema = None
+                    col_map = {}
 
-        if not EXPECTED_COLUMNS.issubset(col_map):
+        if schema is None:
             invalid_files.append(file_path.name)
             continue
 
         inserted_for_file = 0
-        for _, row in df.iterrows():
-            member_name = _safe_text(row[col_map["member_name"]])
-            if not member_name:
-                skipped_rows += 1
-                continue
+        if schema == "bodycodi":
+            for _, row in df.iterrows():
+                member_name = _safe_text(row[col_map["member_name"]])
+                if not member_name:
+                    skipped_rows += 1
+                    continue
 
-            attendance = _safe_float(row[col_map["attendance_rate"]])
-            repurchase = _safe_float(row[col_map["repurchase_rate"]])
-            csat = _safe_float(row[col_map["csat_score"]])
+                attendance = _safe_float(row[col_map["attendance_rate"]])
+                repurchase = _safe_float(row[col_map["repurchase_rate"]])
+                csat = _safe_float(row[col_map["csat_score"]])
 
-            if attendance is None or repurchase is None or csat is None:
-                skipped_rows += 1
-                continue
+                if attendance is None or repurchase is None or csat is None:
+                    skipped_rows += 1
+                    continue
 
-            branch = _safe_text(row[col_map["branch"]])
-            month = _format_month(row[col_map["month"]])
+                branch_col = col_map.get("branch")
+                branch = _safe_text(row[branch_col]) if branch_col else ""
+                month = _format_month(row[col_map["month"]])
 
-            db.execute(
-                """
-                INSERT INTO bodycodi_records (
-                    member_name, branch, attendance_rate, repurchase_rate,
-                    csat_score, month, uploaded_file, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    member_name,
-                    branch,
-                    attendance,
-                    repurchase,
-                    csat,
-                    month,
-                    file_path.name,
-                    datetime.utcnow().isoformat(),
-                ),
-            )
-            inserted_rows += 1
-            inserted_for_file += 1
+                db.execute(
+                    """
+                    INSERT INTO bodycodi_records (
+                        member_name, branch, attendance_rate, repurchase_rate,
+                        csat_score, month, uploaded_file, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        member_name,
+                        branch,
+                        attendance,
+                        repurchase,
+                        csat,
+                        month,
+                        file_path.name,
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
+                inserted_rows += 1
+                inserted_for_file += 1
+        else:
+            for _, row in df.iterrows():
+                payment_dt = _parse_payment_datetime(row[col_map["payment_datetime"]])
+                if not payment_dt:
+                    skipped_rows += 1
+                    continue
+
+                payment_amount = _safe_float(row[col_map["payment_amount"]])
+                if payment_amount is None:
+                    skipped_rows += 1
+                    continue
+
+                refund_col = col_map.get("refund_amount")
+                refund_amount = _safe_float(row[refund_col]) if refund_col else 0.0
+                refund_amount = refund_amount if refund_amount is not None else 0.0
+                net_amount = payment_amount - refund_amount
+
+                branch_col = col_map.get("branch_name")
+                member_col = col_map.get("member_name")
+                contact_col = col_map.get("contact")
+                sale_id_col = col_map.get("sale_id")
+                product_col = col_map.get("product")
+                status_col = col_map.get("sale_status")
+                sale_price_col = col_map.get("sale_price")
+                payment_category_col = col_map.get("payment_category")
+                payment_method_col = col_map.get("payment_method")
+                payment_type_col = col_map.get("payment_type")
+                deduction_col = col_map.get("deduction")
+                outstanding_col = col_map.get("outstanding_amount")
+                refund_method_col = col_map.get("refund_method")
+                sales_rep_col = col_map.get("sales_rep")
+                memo_col = col_map.get("memo")
+                points_col = col_map.get("points")
+
+                db.execute(
+                    """
+                    INSERT INTO sales_records (
+                        branch_name, payment_datetime, payment_date, payment_week, payment_month,
+                        member_name, contact, sale_id, product, sale_status, sale_price,
+                        payment_category, payment_method, payment_type, deduction, payment_amount,
+                        outstanding_amount, refund_method, refund_amount, net_amount,
+                        sales_rep, memo, points, uploaded_file, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _safe_text(row[branch_col]) if branch_col else "",
+                        payment_dt.isoformat(sep=" "),
+                        payment_dt.date().isoformat(),
+                        _format_week(payment_dt),
+                        payment_dt.strftime("%Y-%m"),
+                        _safe_text(row[member_col]) if member_col else "",
+                        _safe_text(row[contact_col]) if contact_col else "",
+                        _safe_text(row[sale_id_col]) if sale_id_col else "",
+                        _safe_text(row[product_col]) if product_col else "",
+                        _safe_text(row[status_col]) if status_col else "",
+                        _safe_float(row[sale_price_col]) if sale_price_col else None,
+                        _safe_text(row[payment_category_col]) if payment_category_col else "",
+                        _safe_text(row[payment_method_col]) if payment_method_col else "",
+                        _safe_text(row[payment_type_col]) if payment_type_col else "",
+                        _safe_float(row[deduction_col]) if deduction_col else None,
+                        payment_amount,
+                        _safe_float(row[outstanding_col]) if outstanding_col else None,
+                        _safe_text(row[refund_method_col]) if refund_method_col else "",
+                        refund_amount,
+                        net_amount,
+                        _safe_text(row[sales_rep_col]) if sales_rep_col else "",
+                        _safe_text(row[memo_col]) if memo_col else "",
+                        _safe_float(row[points_col]) if points_col else None,
+                        file_path.name,
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
+                inserted_rows += 1
+                inserted_for_file += 1
 
         db.execute(
             """
@@ -424,6 +633,44 @@ def compute_metrics() -> DashboardMetrics:
         avg_csat=round(avg_csat, 2),
         performance_score=performance_score,
         judgment=judgment,
+    )
+
+
+def compute_sales_metrics() -> SalesMetrics:
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT
+            SUM(net_amount) AS total_sales,
+            COUNT(CASE WHEN net_amount > 0 THEN 1 END) AS total_transactions,
+            SUM(refund_amount) AS total_refunds
+        FROM sales_records
+        """
+    ).fetchone()
+
+    total_sales = float(row["total_sales"] or 0)
+    total_transactions = int(row["total_transactions"] or 0)
+    total_refunds = float(row["total_refunds"] or 0)
+
+    unique_members_row = db.execute(
+        """
+        SELECT COUNT(DISTINCT member_name) AS unique_members
+        FROM sales_records
+        WHERE member_name IS NOT NULL AND member_name != ''
+        """
+    ).fetchone()
+    unique_members = int(unique_members_row["unique_members"] or 0)
+
+    avg_order_value = round(
+        total_sales / total_transactions, 2
+    ) if total_transactions else 0.0
+
+    return SalesMetrics(
+        total_sales=round(total_sales, 2),
+        total_transactions=total_transactions,
+        avg_order_value=avg_order_value,
+        total_refunds=round(total_refunds, 2),
+        unique_members=unique_members,
     )
 
 
@@ -559,28 +806,53 @@ def dashboard() -> str:
                         flash(f"일부 파일은 제외되었습니다: {rejected}건")
                     flash("업로드 반영이 완료되었습니다.")
 
-    metrics = compute_metrics()
+    metrics = compute_sales_metrics()
 
     db = get_db()
     monthly_rows = db.execute(
         """
-        SELECT month,
-               ROUND(AVG(attendance_rate),2) AS attendance,
-               ROUND(AVG(repurchase_rate),2) AS repurchase,
-               ROUND(AVG(csat_score),2) AS csat
-        FROM bodycodi_records
-        GROUP BY month
-        ORDER BY month
+        SELECT payment_month AS period,
+               ROUND(SUM(net_amount),2) AS sales,
+               ROUND(
+                   SUM(net_amount) * 1.0 /
+                   NULLIF(COUNT(CASE WHEN net_amount > 0 THEN 1 END), 0),
+                   2
+               ) AS aov
+        FROM sales_records
+        WHERE payment_month IS NOT NULL AND payment_month != ''
+        GROUP BY payment_month
+        ORDER BY payment_month
         """
     ).fetchall()
 
-    chart_labels = [row["month"] for row in monthly_rows]
-    attendance_data = [row["attendance"] for row in monthly_rows]
-    repurchase_data = [row["repurchase"] for row in monthly_rows]
+    weekly_rows = db.execute(
+        """
+        SELECT payment_week AS period,
+               ROUND(SUM(net_amount),2) AS sales,
+               ROUND(
+                   SUM(net_amount) * 1.0 /
+                   NULLIF(COUNT(CASE WHEN net_amount > 0 THEN 1 END), 0),
+                   2
+               ) AS aov
+        FROM sales_records
+        WHERE payment_week IS NOT NULL AND payment_week != ''
+        GROUP BY payment_week
+        ORDER BY payment_week
+        """
+    ).fetchall()
+
+    monthly_labels = [row["period"] for row in monthly_rows]
+    monthly_sales = [row["sales"] or 0 for row in monthly_rows]
+    monthly_aov = [row["aov"] or 0 for row in monthly_rows]
+
+    weekly_labels = [row["period"] for row in weekly_rows]
+    weekly_sales = [row["sales"] or 0 for row in weekly_rows]
+    weekly_aov = [row["aov"] or 0 for row in weekly_rows]
+
     recent_records = db.execute(
         """
-        SELECT member_name, month, attendance_rate
-        FROM bodycodi_records
+        SELECT member_name, payment_date, net_amount
+        FROM sales_records
         ORDER BY id DESC
         LIMIT 8
         """
@@ -591,9 +863,12 @@ def dashboard() -> str:
         metrics=metrics,
         ingest_result=ingest_result,
         recent_records=recent_records,
-        chart_labels=json.dumps(chart_labels, ensure_ascii=False),
-        attendance_data=json.dumps(attendance_data),
-        repurchase_data=json.dumps(repurchase_data),
+        monthly_labels=json.dumps(monthly_labels, ensure_ascii=False),
+        monthly_sales=json.dumps(monthly_sales),
+        monthly_aov=json.dumps(monthly_aov),
+        weekly_labels=json.dumps(weekly_labels, ensure_ascii=False),
+        weekly_sales=json.dumps(weekly_sales),
+        weekly_aov=json.dumps(weekly_aov),
     )
 
 

@@ -2,8 +2,9 @@
 {% block content %}
 <section class="hero">
   <div class="card">
-    <h2>바디코디 성과 대시보드</h2>
+    <h2>판매 데이터 대시보드</h2>
     <p>폴더 자동 수집: `data/raw`에 엑셀(.xlsx) 또는 CSV를 넣고 아래 버튼을 눌러 최신 데이터를 반영하세요.</p>
+    <p>결제일시/결제금액/환불지급액 기준으로 주별·월별 매출과 객단가를 계산합니다.</p>
     <div style="margin-top:12px; display:flex; flex-direction:column; gap:10px;">
       <form method="post">
         <input type="hidden" name="action" value="ingest">
@@ -44,77 +45,100 @@
     {% endif %}
   </div>
   <div class="card">
-    <h3>성과 판단</h3>
-    <p>종합점수는 출석률(40%) + 재구매율(35%) + CSAT환산(25%)로 계산됩니다.</p>
-    {% set score_class = 'score-good' if metrics.performance_score >= 85 else ('score-mid' if metrics.performance_score >= 70 else 'score-bad') %}
-    <h1 class="{{ score_class }}" style="margin-top:10px;">{{ metrics.performance_score }}</h1>
-    <p>판단 결과: <strong>{{ metrics.judgment }}</strong></p>
+    <h3>지표 정의</h3>
+    <p>매출 = 결제금액 - 환불지급액 (순매출 기준)</p>
+    <p>객단가 = 순매출 ÷ 거래 건수</p>
+    <p style="font-size:13px; color:#667085;">※ 환불만 있는 건은 매출에서 차감되며, 객단가 계산은 결제금액이 있는 건만 포함됩니다.</p>
   </div>
 </section>
 
-<section class="grid-4">
-  <div class="card kpi"><div class="label">총 회원 수</div><div class="value">{{ metrics.total_members }}</div><span class="badge">전체 기준</span></div>
-  <div class="card kpi"><div class="label">평균 출석률</div><div class="value">{{ metrics.avg_attendance }}%</div><span class="badge">Attendance</span></div>
-  <div class="card kpi"><div class="label">평균 재구매율</div><div class="value">{{ metrics.avg_repurchase }}%</div><span class="badge">Repurchase</span></div>
-  <div class="card kpi"><div class="label">평균 CSAT</div><div class="value">{{ metrics.avg_csat }}</div><span class="badge">/ 5.0</span></div>
+<section class="grid-5">
+  <div class="card kpi"><div class="label">총 매출</div><div class="value">{{ "{:,.0f}".format(metrics.total_sales) }}</div><span class="badge">원</span></div>
+  <div class="card kpi"><div class="label">거래 건수</div><div class="value">{{ metrics.total_transactions }}</div><span class="badge">건</span></div>
+  <div class="card kpi"><div class="label">객단가</div><div class="value">{{ "{:,.0f}".format(metrics.avg_order_value) }}</div><span class="badge">원</span></div>
+  <div class="card kpi"><div class="label">환불 합계</div><div class="value">{{ "{:,.0f}".format(metrics.total_refunds) }}</div><span class="badge">원</span></div>
+  <div class="card kpi"><div class="label">고유 회원</div><div class="value">{{ metrics.unique_members }}</div><span class="badge">명</span></div>
 </section>
 
 <section class="two-cols">
   <div class="card">
-    <h3>월별 KPI 추이</h3>
-    <canvas id="kpiChart" height="120"></canvas>
+    <h3>주별 매출 & 객단가</h3>
+    <canvas id="weeklyChart" height="140"></canvas>
   </div>
   <div class="card">
-    <h3>최근 입력 데이터</h3>
-    <table class="table">
-      <thead><tr><th>회원</th><th>월</th><th>출석률</th></tr></thead>
-      <tbody>
-      {% for row in recent_records %}
-        <tr>
-          <td>{{ row.member_name }}</td>
-          <td>{{ row.month }}</td>
-          <td>{{ row.attendance_rate }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="3">데이터가 없습니다.</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <h3>월별 매출 & 객단가</h3>
+    <canvas id="monthlyChart" height="140"></canvas>
   </div>
+</section>
+
+<section class="card" style="margin-top:16px;">
+  <h3>최근 결제</h3>
+  <table class="table">
+    <thead><tr><th>회원</th><th>결제일</th><th>순매출</th></tr></thead>
+    <tbody>
+    {% for row in recent_records %}
+      <tr>
+        <td>{{ row.member_name }}</td>
+        <td>{{ row.payment_date }}</td>
+        <td>{{ "{:,.0f}".format(row.net_amount or 0) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3">데이터가 없습니다.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </section>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-const labels = {{ chart_labels|safe }};
-const attendanceData = {{ attendance_data|safe }};
-const repurchaseData = {{ repurchase_data|safe }};
+const weeklyLabels = {{ weekly_labels|safe }};
+const weeklySales = {{ weekly_sales|safe }};
+const weeklyAov = {{ weekly_aov|safe }};
 
-new Chart(document.getElementById('kpiChart'), {
-  type: 'line',
-  data: {
-    labels,
-    datasets: [
-      {
-        label: '출석률',
-        data: attendanceData,
-        borderColor: '#2659ff',
-        backgroundColor: 'rgba(38,89,255,.08)',
-        tension: .35,
-        fill: true
-      },
-      {
-        label: '재구매율',
-        data: repurchaseData,
-        borderColor: '#12b76a',
-        tension: .35
+const monthlyLabels = {{ monthly_labels|safe }};
+const monthlySales = {{ monthly_sales|safe }};
+const monthlyAov = {{ monthly_aov|safe }};
+
+function buildSalesChart(canvasId, labels, salesData, aovData) {
+  new Chart(document.getElementById(canvasId), {
+    data: {
+      labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: '매출(원)',
+          data: salesData,
+          backgroundColor: 'rgba(38,89,255,.18)',
+          borderColor: '#2659ff',
+          borderWidth: 1
+        },
+        {
+          type: 'line',
+          label: '객단가(원)',
+          data: aovData,
+          borderColor: '#12b76a',
+          backgroundColor: 'rgba(18,183,106,.1)',
+          tension: .35,
+          yAxisID: 'y1'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom' } },
+      scales: {
+        y: { beginAtZero: true },
+        y1: {
+          beginAtZero: true,
+          position: 'right',
+          grid: { drawOnChartArea: false }
+        }
       }
-    ]
-  },
-  options: {
-    responsive: true,
-    plugins: { legend: { position: 'bottom' } },
-    scales: { y: { beginAtZero: true, max: 100 } }
-  }
-});
+    }
+  });
+}
+
+buildSalesChart('weeklyChart', weeklyLabels, weeklySales, weeklyAov);
+buildSalesChart('monthlyChart', monthlyLabels, monthlySales, monthlyAov);
 </script>
 {% endblock %}

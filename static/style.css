@@ -77,6 +77,7 @@ h1,h2,h3,h4 { margin: 0 0 10px; }
 p { margin: 0 0 8px; color: var(--sub); line-height: 1.5; }
 
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
 .kpi .label { font-size: 12px; color: var(--sub); }
 .kpi .value { font-size: 28px; font-weight: 800; }
 .kpi .badge {
@@ -137,5 +138,5 @@ input[type="file"] {
 .score-bad { color: var(--bad); }
 
 @media (max-width: 920px) {
-  .hero, .two-cols, .grid-4, form .row { grid-template-columns: 1fr; }
+  .hero, .two-cols, .grid-4, .grid-5, form .row { grid-template-columns: 1fr; }
 }
