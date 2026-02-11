@@ -11,10 +11,20 @@
       </form>
       <form method="post" enctype="multipart/form-data">
         <input type="hidden" name="action" value="upload">
-        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-          <input type="file" name="data_file" accept=".xlsx,.csv" required>
-          <button class="btn alt" type="submit">파일 업로드 후 반영</button>
+        <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+          <label style="font-size:13px; font-weight:600;">
+            파일 선택
+            <input type="file" name="data_files" accept=".xlsx,.csv" multiple>
+          </label>
+          <label style="font-size:13px; font-weight:600;">
+            폴더 선택
+            <input type="file" name="data_folder" webkitdirectory directory>
+          </label>
+          <button class="btn alt" type="submit">업로드 반영</button>
         </div>
+        <p style="margin-top:6px; font-size:12px; color:#667085;">
+          폴더 업로드는 Chrome/Edge 권장 (폴더 내 .xlsx/.csv만 처리)
+        </p>
       </form>
     </div>
     {% if ingest_result %}

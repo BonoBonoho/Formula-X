@@ -418,18 +418,41 @@ def dashboard() -> str:
         if action == "ingest":
             ingest_result = ingest_excel_files()
         elif action == "upload":
-            upload_file = request.files.get("data_file")
-            if not upload_file or upload_file.filename == "":
-                flash("업로드할 파일을 선택해주세요.")
-            elif not _allowed_file(upload_file.filename):
-                flash("지원하지 않는 파일 형식입니다. (.xlsx, .csv)")
+            upload_files = request.files.getlist("data_files")
+            folder_files = request.files.getlist("data_folder")
+            files = [file for file in (upload_files + folder_files) if file and file.filename]
+
+            if not files:
+                flash("업로드할 파일 또는 폴더를 선택해주세요.")
             else:
                 RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-                filename = secure_filename(upload_file.filename)
-                saved_path = RAW_DATA_DIR / filename
-                upload_file.save(saved_path)
-                ingest_result = ingest_excel_files([saved_path])
-                flash("파일 업로드 및 반영이 완료되었습니다.")
+                saved_paths = []
+                rejected = 0
+
+                for upload_file in files:
+                    if not _allowed_file(upload_file.filename):
+                        rejected += 1
+                        continue
+
+                    original_name = upload_file.filename
+                    base_name = secure_filename(Path(original_name).name)
+                    if "/" in original_name or "\\" in original_name:
+                        path_hash = hashlib.sha256(original_name.encode()).hexdigest()[:8]
+                        filename = f"{path_hash}_{base_name}"
+                    else:
+                        filename = base_name
+
+                    saved_path = RAW_DATA_DIR / filename
+                    upload_file.save(saved_path)
+                    saved_paths.append(saved_path)
+
+                if not saved_paths:
+                    flash("지원하지 않는 파일 형식입니다. (.xlsx, .csv)")
+                else:
+                    ingest_result = ingest_excel_files(saved_paths)
+                    if rejected:
+                        flash(f"일부 파일은 제외되었습니다: {rejected}건")
+                    flash("업로드 반영이 완료되었습니다.")
 
     metrics = compute_metrics()
 
