@@ -41,6 +41,15 @@
         {% if ingest_result.skipped_rows %}
           <br>무시된 행: {{ ingest_result.skipped_rows }}
         {% endif %}
+        {% if ingest_result.missing_payment_datetime %}
+          <br>결제일시 인식 실패: {{ ingest_result.missing_payment_datetime }}
+        {% endif %}
+        {% if ingest_result.missing_payment_amount %}
+          <br>결제금액 인식 실패: {{ ingest_result.missing_payment_amount }}
+        {% endif %}
+        {% if ingest_result.fallback_amount_rows %}
+          <br>결제금액 대체(판매가 사용): {{ ingest_result.fallback_amount_rows }}
+        {% endif %}
       </div>
     {% endif %}
   </div>

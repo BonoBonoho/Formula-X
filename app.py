@@ -278,8 +278,13 @@ def _safe_float(value: Any) -> float | None:
     if value is None or pd.isna(value):
         return None
     if isinstance(value, str):
+        negative = "(" in value and ")" in value
         cleaned = value.strip().replace(",", "").replace("%", "")
         cleaned = re.sub(r"[^\d\.\-]", "", cleaned)
+        if cleaned.endswith("-"):
+            cleaned = f"-{cleaned[:-1]}"
+        if negative and cleaned and not cleaned.startswith("-"):
+            cleaned = f"-{cleaned}"
         if cleaned in {"", "-", "."}:
             return None
         value = cleaned
@@ -316,6 +321,18 @@ def _parse_payment_datetime(value: Any) -> datetime | None:
     if isinstance(value, str):
         cleaned = value.strip()
         cleaned = cleaned.replace("오전", "AM").replace("오후", "PM")
+        cleaned = re.sub(r"\([가-힣]\)", "", cleaned)
+        cleaned = (
+            cleaned.replace("년", "-")
+            .replace("월", "-")
+            .replace("일", "")
+            .replace(".", "-")
+            .replace("/", "-")
+        )
+        cleaned = re.sub(r"(\d{1,2})시", r"\1:", cleaned)
+        cleaned = re.sub(r"(\d{1,2})분", r"\1", cleaned)
+        cleaned = cleaned.replace("초", "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         parsed = pd.to_datetime(cleaned, errors="coerce")
     else:
         parsed = pd.to_datetime(value, errors="coerce")
@@ -415,6 +432,9 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
     invalid_files = []
     inserted_rows = 0
     skipped_rows = 0
+    missing_payment_datetime = 0
+    missing_payment_amount = 0
+    fallback_amount_rows = 0
 
     if file_paths is None:
         file_paths = sorted(
@@ -518,38 +538,44 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
                 inserted_rows += 1
                 inserted_for_file += 1
         else:
+            sale_price_col = col_map.get("sale_price")
+            refund_col = col_map.get("refund_amount")
+            branch_col = col_map.get("branch_name")
+            member_col = col_map.get("member_name")
+            contact_col = col_map.get("contact")
+            sale_id_col = col_map.get("sale_id")
+            product_col = col_map.get("product")
+            status_col = col_map.get("sale_status")
+            payment_category_col = col_map.get("payment_category")
+            payment_method_col = col_map.get("payment_method")
+            payment_type_col = col_map.get("payment_type")
+            deduction_col = col_map.get("deduction")
+            outstanding_col = col_map.get("outstanding_amount")
+            refund_method_col = col_map.get("refund_method")
+            sales_rep_col = col_map.get("sales_rep")
+            memo_col = col_map.get("memo")
+            points_col = col_map.get("points")
+
             for _, row in df.iterrows():
                 payment_dt = _parse_payment_datetime(row[col_map["payment_datetime"]])
                 if not payment_dt:
+                    missing_payment_datetime += 1
                     skipped_rows += 1
                     continue
 
                 payment_amount = _safe_float(row[col_map["payment_amount"]])
+                if payment_amount is None and sale_price_col:
+                    payment_amount = _safe_float(row[sale_price_col])
+                    if payment_amount is not None:
+                        fallback_amount_rows += 1
                 if payment_amount is None:
+                    missing_payment_amount += 1
                     skipped_rows += 1
                     continue
 
-                refund_col = col_map.get("refund_amount")
                 refund_amount = _safe_float(row[refund_col]) if refund_col else 0.0
                 refund_amount = refund_amount if refund_amount is not None else 0.0
                 net_amount = payment_amount - refund_amount
-
-                branch_col = col_map.get("branch_name")
-                member_col = col_map.get("member_name")
-                contact_col = col_map.get("contact")
-                sale_id_col = col_map.get("sale_id")
-                product_col = col_map.get("product")
-                status_col = col_map.get("sale_status")
-                sale_price_col = col_map.get("sale_price")
-                payment_category_col = col_map.get("payment_category")
-                payment_method_col = col_map.get("payment_method")
-                payment_type_col = col_map.get("payment_type")
-                deduction_col = col_map.get("deduction")
-                outstanding_col = col_map.get("outstanding_amount")
-                refund_method_col = col_map.get("refund_method")
-                sales_rep_col = col_map.get("sales_rep")
-                memo_col = col_map.get("memo")
-                points_col = col_map.get("points")
 
                 db.execute(
                     """
@@ -608,6 +634,9 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
         "invalid_files": invalid_files,
         "inserted_rows": inserted_rows,
         "skipped_rows": skipped_rows,
+        "missing_payment_datetime": missing_payment_datetime,
+        "missing_payment_amount": missing_payment_amount,
+        "fallback_amount_rows": fallback_amount_rows,
     }
 
 
