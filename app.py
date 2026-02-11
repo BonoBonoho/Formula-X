@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +30,75 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH = DATA_DIR / "app.db"
 RAW_DATA_DIR = DATA_DIR / "data" / "raw"
 ALLOWED_EXTENSIONS = {".xlsx", ".csv"}
+EXPECTED_COLUMNS = {
+    "member_name",
+    "branch",
+    "attendance_rate",
+    "repurchase_rate",
+    "csat_score",
+    "month",
+}
+COLUMN_ALIASES = {
+    "member_name": {
+        "member_name",
+        "membername",
+        "회원명",
+        "회원이름",
+        "고객명",
+        "이름",
+        "회원",
+    },
+    "branch": {
+        "branch",
+        "지점",
+        "센터",
+        "클럽",
+        "지부",
+    },
+    "attendance_rate": {
+        "attendance_rate",
+        "attendance",
+        "attendance%",
+        "출석률",
+        "출석",
+        "출석율",
+    },
+    "repurchase_rate": {
+        "repurchase_rate",
+        "repurchase",
+        "repurchase%",
+        "재구매율",
+        "재구매",
+        "재구매율(%)",
+    },
+    "csat_score": {
+        "csat_score",
+        "csat",
+        "고객만족",
+        "고객만족도",
+        "만족도",
+    },
+    "month": {
+        "month",
+        "월",
+        "년월",
+        "기간",
+        "정산월",
+    },
+}
+
+
+def _normalize_key(value: Any) -> str:
+    text = str(value).strip().lower()
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[^0-9a-z가-힣]+", "", text)
+    return text
+
+
+NORMALIZED_ALIASES = {
+    canonical: {_normalize_key(alias) for alias in aliases}
+    for canonical, aliases in COLUMN_ALIASES.items()
+}
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
@@ -156,14 +226,49 @@ def _format_month(value: Any) -> str:
 
 
 def _load_dataframe(file_path: Path) -> pd.DataFrame:
+    return _load_dataframe_with_header(file_path, header=0)
+
+
+def _load_dataframe_with_header(file_path: Path, header: int | None) -> pd.DataFrame:
     if file_path.suffix.lower() == ".csv":
-        return pd.read_csv(file_path)
-    return pd.read_excel(file_path)
+        return pd.read_csv(file_path, header=header)
+    return pd.read_excel(file_path, header=header)
 
 
-def _normalize_columns(df: pd.DataFrame) -> dict[str, str]:
+def _build_column_map(df: pd.DataFrame) -> dict[str, str]:
     df.columns = [str(col).strip() for col in df.columns]
-    return {col.lower(): col for col in df.columns}
+    mapping: dict[str, str] = {}
+    for col in df.columns:
+        key = _normalize_key(col)
+        for canonical, aliases in NORMALIZED_ALIASES.items():
+            if key in aliases:
+                mapping[canonical] = col
+                break
+    return mapping
+
+
+def _row_matches_expected(values: list[Any]) -> bool:
+    found: set[str] = set()
+    for value in values:
+        key = _normalize_key(value)
+        for canonical, aliases in NORMALIZED_ALIASES.items():
+            if key in aliases:
+                found.add(canonical)
+    return EXPECTED_COLUMNS.issubset(found)
+
+
+def _find_header_row(file_path: Path) -> int | None:
+    try:
+        probe = _load_dataframe_with_header(file_path, header=None)
+    except Exception:
+        return None
+
+    for idx in range(min(8, len(probe.index))):
+        row_values = probe.iloc[idx].tolist()
+        if _row_matches_expected(row_values):
+            return idx
+
+    return None
 
 
 def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, Any]:
@@ -182,15 +287,6 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
         )
     else:
         file_paths = [Path(path) for path in file_paths]
-
-    expected = {
-        "member_name",
-        "branch",
-        "attendance_rate",
-        "repurchase_rate",
-        "csat_score",
-        "month",
-    }
 
     for file_path in file_paths:
         if not file_path.exists() or not _allowed_file(file_path.name):
@@ -220,8 +316,17 @@ def ingest_excel_files(file_paths: Iterable[Path] | None = None) -> dict[str, An
             invalid_files.append(file_path.name)
             continue
 
-        col_map = _normalize_columns(df)
-        if not expected.issubset(col_map):
+        col_map = _build_column_map(df)
+        if not EXPECTED_COLUMNS.issubset(col_map):
+            header_row = _find_header_row(file_path)
+            if header_row is not None:
+                try:
+                    df = _load_dataframe_with_header(file_path, header=header_row)
+                    col_map = _build_column_map(df)
+                except Exception:
+                    pass
+
+        if not EXPECTED_COLUMNS.issubset(col_map):
             invalid_files.append(file_path.name)
             continue
 
